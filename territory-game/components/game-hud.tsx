@@ -1,4 +1,5 @@
 import type { GameState, Player } from "@/lib/types"
+import { calculateUnitUpkeep } from "@/lib/economy"
 
 interface GameHUDProps {
   gameState: GameState
@@ -18,6 +19,8 @@ export function GameHUD({ gameState, player }: GameHUDProps) {
   const interestAmount = Math.min(player.balance * player.interestRate, maxInterest)
 
   const totalStructures = Object.values(player.structures).reduce((sum, value) => sum + value, 0)
+  const upkeep = calculateUnitUpkeep(player)
+  const netGain = player.income - upkeep
 
   const unitSummary = Object.entries(player.units)
     .filter(([, count]) => count > 0)
@@ -39,6 +42,18 @@ export function GameHUD({ gameState, player }: GameHUDProps) {
           <div>
             <div className="text-xs text-gray-400 uppercase tracking-wide">Income/tick</div>
             <div className="text-lg font-semibold text-green-400">+${player.income.toFixed(0)}</div>
+          </div>
+
+          <div>
+            <div className="text-xs text-gray-400 uppercase tracking-wide">Unit upkeep</div>
+            <div className="text-lg font-semibold text-red-400">-${upkeep.toFixed(1)}</div>
+          </div>
+
+          <div>
+            <div className="text-xs text-gray-400 uppercase tracking-wide">Net change</div>
+            <div className={`text-lg font-semibold ${netGain >= 0 ? "text-[#7fe9ff]" : "text-red-400"}`}>
+              {netGain >= 0 ? "+" : ""}{netGain.toFixed(1)}
+            </div>
           </div>
 
           <div>

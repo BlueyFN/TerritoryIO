@@ -37,6 +37,8 @@ export function Minimap({ gameState, pan, zoom, baseCellSize, viewportWidth, vie
     const cellHeight = height / gridHeight
 
     // Draw each cell
+    const humanAlliances = gameState.players[0]?.alliances ?? []
+
     for (let y = 0; y < gridHeight; y++) {
       for (let x = 0; x < gridWidth; x++) {
         const cell = gameState.grid[y][x]
@@ -44,10 +46,14 @@ export function Minimap({ gameState, pan, zoom, baseCellSize, viewportWidth, vie
         // Skip water cells
         if (cell.terrain === "water") {
           ctx.fillStyle = "#0a0a0a"
-        } else if (cell.owner !== null) {
-          // Owned cell - use player color
-          const player = gameState.players[cell.owner]
-          ctx.fillStyle = player?.color || "#2a2a2a"
+        } else if (cell.owner >= 0) {
+          // Owned cell - use player color with alliance tint
+          const owner = gameState.players[cell.owner]
+          let color = owner?.color || "#2a2a2a"
+          if (humanAlliances.includes(cell.owner)) {
+            color = "#1f9be5"
+          }
+          ctx.fillStyle = color
         } else {
           // Neutral land
           ctx.fillStyle = "#2a2a2a"

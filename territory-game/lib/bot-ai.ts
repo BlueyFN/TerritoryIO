@@ -256,7 +256,7 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
     }
 
     // Decide attack frequency based on difficulty
-    const attackChance = 0.35 + state.difficulty * 0.35
+    const attackChance = 0.45 + state.difficulty * 0.4
     if (Math.random() > attackChance) return
 
     // Throttle attacks
@@ -297,7 +297,7 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
     const neutralTargets = frontier.filter((c) => c.neutral)
     const hostileTargets = frontier.filter((c) => !c.neutral)
 
-    const maxOrders = Math.max(2, Math.min(5, Math.ceil(bot.cellCount / 12)))
+    const maxOrders = Math.max(3, Math.min(6, Math.ceil(bot.cellCount / 10)))
     const usedBuckets = new Set<number>()
     const usedTargets = new Set<string>()
     const selected: TargetCandidate[] = []
@@ -318,12 +318,18 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
     budget = Math.max(25, Math.min(budget, bot.balance - 5))
     let remainingBudget = budget
     let issued = 0
+    const localCommit = new Map<string, number>()
 
     for (const target of selected) {
       if (remainingBudget <= 5) break
       const baseRatio = target.neutral ? 0.18 + state.difficulty * 0.12 : 0.3 + state.difficulty * 0.2
       const spendBase = Math.min(remainingBudget, bot.balance)
-      const amount = Math.max(15, Math.floor(spendBase * baseRatio))
+      const cellKey = `${target.from.x}:${target.from.y}`
+      const committed = localCommit.get(cellKey) ?? 0
+      const localReserve = Math.max(0, target.from.balance - committed)
+      const localCap = Math.max(25, Math.floor(localReserve * 0.9))
+      let amount = Math.max(15, Math.floor(spendBase * baseRatio))
+      amount = Math.min(amount, localCap, Math.floor(remainingBudget))
       if (amount <= 0) continue
 
       orders.push({
@@ -335,6 +341,8 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
         attackerId: bot.id,
       })
 
+      const drainEstimate = Math.max(10, Math.floor(amount * 0.6))
+      localCommit.set(cellKey, committed + drainEstimate)
       remainingBudget -= amount
       issued++
 

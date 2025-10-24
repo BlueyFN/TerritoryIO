@@ -12,47 +12,134 @@ import {
 } from "./economy"
 
 function developBotEconomies(state: GameState) {
-  const availableStructureTypes = Object.keys(STRUCTURE_DEFINITIONS) as (keyof typeof STRUCTURE_DEFINITIONS)[]
   state.players.forEach((player) => {
     if (!player.isBot || !player.isAlive) return
 
+    const structureCounts = createEmptyStructureTally()
     const playerCells: Cell[] = []
-    for (const row of state.grid) {
-      for (const cell of row) {
-        if (cell.owner === player.id) {
-          playerCells.push(cell)
+    const emptyCells: Cell[] = []
+    const borderCells: Cell[] = []
+    const coastalCells: Cell[] = []
+
+    for (let y = 0; y < state.height; y++) {
+      for (let x = 0; x < state.width; x++) {
+        const cell = state.grid[y][x]
+        if (cell.owner !== player.id) continue
+
+        playerCells.push(cell)
+        if (cell.structure) {
+          structureCounts[cell.structure] += 1
+        } else {
+          emptyCells.push(cell)
+        }
+
+        const neighbors = getNeighbors(x, y, state.width, state.height)
+        let touchesEnemy = false
+        let touchesWater = false
+        for (const neighbor of neighbors) {
+          const neighborCell = state.grid[neighbor.y][neighbor.x]
+          if (neighborCell.terrain === "water") {
+            touchesWater = true
+          }
+          if (
+            neighborCell.owner >= 0 &&
+            neighborCell.owner !== player.id &&
+            !player.alliances.includes(neighborCell.owner)
+          ) {
+            touchesEnemy = true
+          }
+        }
+
+        if (touchesEnemy) {
+          borderCells.push(cell)
+        }
+        if (touchesWater) {
+          coastalCells.push(cell)
         }
       }
     }
 
-    if (player.balance > 160 && playerCells.length > 0) {
-      const emptyCells = playerCells.filter((cell) => !cell.structure)
-      if (emptyCells.length > 0) {
-        const structureToBuild = availableStructureTypes
-          .slice()
-          .sort((a, b) => (player.structures[a] ?? 0) - (player.structures[b] ?? 0))[0]
+    if (playerCells.length === 0) return
+
+    const economicReserve = Math.max(50, Math.floor(player.cellCount * 1.5))
+    if (player.balance > economicReserve && emptyCells.length > 0) {
+      let structureToBuild: keyof typeof STRUCTURE_DEFINITIONS | null = null
+      let placementPool: Cell[] = emptyCells
+
+      const desiredCity = Math.max(1, Math.ceil(player.cellCount / 10))
+      const desiredBarracks = Math.max(1, Math.ceil(player.cellCount / 14))
+      const desiredAntiAir = Math.max(1, Math.floor(player.cellCount / 18))
+      const desiredNaval = state.mapType === "archipelago" ? Math.max(1, Math.floor(player.cellCount / 12)) : Math.floor(player.cellCount / 20)
+      const desiredMissile = state.tick > 150 ? Math.max(1, Math.floor(player.cellCount / 26)) : 0
+
+      if (structureCounts.city < desiredCity) {
+        structureToBuild = "city"
+      } else if (structureCounts.barracks < desiredBarracks) {
+        structureToBuild = "barracks"
+      } else if (borderCells.length > 0 && structureCounts.antiAir < desiredAntiAir) {
+        structureToBuild = "antiAir"
+        placementPool = borderCells
+      } else if (
+        state.mapType === "archipelago" &&
+        coastalCells.length > 0 &&
+        structureCounts.navalYard < desiredNaval
+      ) {
+        structureToBuild = "navalYard"
+        placementPool = coastalCells
+      } else if (desiredMissile > 0 && structureCounts.missileSilo < desiredMissile) {
+        structureToBuild = "missileSilo"
+        placementPool = borderCells.length > 0 ? borderCells : emptyCells
+      }
+
+      if (structureToBuild) {
         const definition = STRUCTURE_DEFINITIONS[structureToBuild]
         if (player.balance >= definition.cost) {
-          const cell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
-          cell.structure = structureToBuild
-          player.balance -= definition.cost
+          const candidates = placementPool.filter((cell) => !cell.structure)
+          const targetPool = candidates.length > 0 ? candidates : emptyCells
+          const target = targetPool[Math.floor(Math.random() * targetPool.length)]
+          if (target) {
+            target.structure = structureToBuild
+            player.balance -= definition.cost
+            structureCounts[structureToBuild] += 1
+          }
         }
       }
     }
 
-    const desiredUnit = (Object.keys(UNIT_DEFINITIONS) as (keyof typeof UNIT_DEFINITIONS)[]).reduce(
-      (best, key) => {
-        const current = player.units[key]
-        if (!best) return key
-        return player.units[key] < player.units[best] ? key : best
-      },
-      "infantry" as keyof typeof UNIT_DEFINITIONS,
-    )
+    const enemyStrength = state.players
+      .filter((opponent) => opponent.id !== player.id && opponent.isAlive && !player.alliances.includes(opponent.id))
+      .reduce((max, opponent) => Math.max(max, opponent.militaryStrength), 0)
 
-    const unitDef = UNIT_DEFINITIONS[desiredUnit]
-    if (player.balance >= unitDef.cost && Math.random() < 0.6) {
-      player.balance -= unitDef.cost
-      player.units[desiredUnit] += 1
+    const desiredUnits: Record<keyof typeof UNIT_DEFINITIONS, number> = {
+      infantry: Math.max(1, Math.ceil(player.cellCount / 3)),
+      tank: Math.max(1, Math.floor(player.cellCount / 6)),
+      antiAir: Math.max(1, Math.floor(player.cellCount / 12)),
+      naval: state.mapType === "archipelago" ? Math.max(1, Math.floor(player.cellCount / 9)) : Math.floor(player.cellCount / 18),
+      missile: state.tick > 160 ? Math.max(1, Math.floor(player.cellCount / 25)) : 0,
+    }
+
+    const unitPriority = (Object.keys(UNIT_DEFINITIONS) as (keyof typeof UNIT_DEFINITIONS)[])
+      .map((type) => {
+        const desired = desiredUnits[type] ?? 0
+        const current = player.units[type]
+        const ratio = desired === 0 ? 1.5 : current / desired
+        return { type, desired, ratio }
+      })
+      .sort((a, b) => a.ratio - b.ratio)
+
+    const pressure = enemyStrength > player.militaryStrength * 0.85
+    for (const { type, desired } of unitPriority) {
+      if (desired <= 0) continue
+      if (!pressure && player.units[type] >= desired) continue
+      const def = UNIT_DEFINITIONS[type]
+      if (player.balance >= def.cost + Math.max(0, economicReserve / 3)) {
+        player.balance -= def.cost
+        player.units[type] += 1
+        if (pressure && player.balance >= def.cost && Math.random() < 0.4) {
+          continue
+        }
+        break
+      }
     }
   })
 }
@@ -159,6 +246,10 @@ export function processTick(state: GameState, orders: AttackOrder[]): GameState 
     const toCell = newState.grid[order.toY]?.[order.toX]
     if (!fromCell || !toCell) return
     if (toCell.owner === -2 || fromCell.owner !== order.attackerId) return
+
+    if (order.sourceDrain === undefined) {
+      fromCell.balance = Math.max(0, fromCell.balance - Math.max(1, Math.floor(order.amount * 0.6)))
+    }
 
     const attacker = newState.players[order.attackerId]
     const defender = toCell.owner >= 0 ? newState.players[toCell.owner] : undefined
