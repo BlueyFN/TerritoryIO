@@ -86,6 +86,7 @@ export function generatePixelMap(type: "continent" | "archipelago", seed: number
         terrain,
         owner: terrain === "water" ? -2 : -1, // -2 for water (unclaimable)
         balance: 0,
+        structure: null,
       }
     }
   }

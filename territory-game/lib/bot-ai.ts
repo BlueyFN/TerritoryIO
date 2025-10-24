@@ -1,4 +1,5 @@
 import type { GameState, Player, Cell, AttackOrder } from "./types"
+import { STRUCTURE_DEFINITIONS, calculateDefenseMultiplier } from "./economy"
 
 interface BotMemory {
   lastAttackTick: number
@@ -59,10 +60,17 @@ function evaluateCellStrength(state: GameState, cell: Cell): number {
   if (!owner || !owner.isAlive) return 0
 
   // Cell balance + player balance factor + terrain defense
-  let strength = cell.balance + owner.balance * 0.1
+  let strength = cell.balance + owner.balance * 0.08
 
   if (cell.terrain === "mountain") strength *= 1.5
   else if (cell.terrain === "desert") strength *= 1.2
+
+  if (cell.structure) {
+    const def = STRUCTURE_DEFINITIONS[cell.structure]
+    strength *= 1 + def.defenseBonus
+  }
+
+  strength *= 1 + calculateDefenseMultiplier(owner) * 0.05
 
   return strength
 }
@@ -77,6 +85,7 @@ function findWeakestNeighbor(state: GameState, bot: Player): Cell | null {
     for (const neighbor of neighbors) {
       // Skip own cells and water
       if (neighbor.owner === bot.id || neighbor.terrain === "water") continue
+      if (bot.alliances.includes(neighbor.owner)) continue
 
       // In free-land phase, only target neutral
       if (state.phase === "free-land" && neighbor.owner !== -1) continue
@@ -99,6 +108,7 @@ function detectOverextendedNeighbor(state: GameState, bot: Player): Cell | null 
   // Look for neighbors who have low balance relative to territory
   for (const player of state.players) {
     if (player.id === bot.id || !player.isAlive) continue
+    if (bot.alliances.includes(player.id)) continue
     if (memory.truceWith.has(player.id)) continue
 
     const balancePerCell = player.balance / Math.max(1, player.cellCount)
@@ -166,14 +176,14 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
 
     let targetCell: Cell | null = null
 
-    // Priority 1: Punish overextended neighbors
+    // Priority 1: Look for enemies not in alliance or truce
     targetCell = detectOverextendedNeighbor(state, bot)
 
     // Priority 2: Continue attacking preferred target
     if (!targetCell && memory.targetPreference !== null) {
       const { x, y } = memory.targetPreference
       const prefCell = state.grid[y][x]
-      if (prefCell.owner !== bot.id) {
+      if (prefCell.owner !== bot.id && !bot.alliances.includes(prefCell.owner)) {
         targetCell = prefCell
       } else {
         memory.targetPreference = null

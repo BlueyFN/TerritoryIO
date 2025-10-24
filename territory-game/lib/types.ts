@@ -4,6 +4,7 @@ export interface Cell {
   terrain: "plains" | "desert" | "mountain" | "water"
   owner: number // -1 = neutral, 0 = player, 1+ = bots
   balance: number // each cell has its own balance
+  structure: StructureType | null
 }
 
 export interface Player {
@@ -17,6 +18,11 @@ export interface Player {
   isBot: boolean
   isAlive: boolean
   truceUntil?: number
+  structures: Record<StructureType, number>
+  units: Record<UnitType, number>
+  unitProgress: Record<UnitType, number>
+  alliances: number[]
+  militaryStrength: number
 }
 
 export interface AttackOrder {
@@ -47,3 +53,12 @@ export interface TerrainType {
   troopLoss: number
   speedPenalty: number
 }
+
+export type StructureType =
+  | "city"
+  | "barracks"
+  | "antiAir"
+  | "navalYard"
+  | "missileSilo"
+
+export type UnitType = "infantry" | "tank" | "antiAir" | "naval" | "missile"
