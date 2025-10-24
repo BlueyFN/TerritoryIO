@@ -4,12 +4,13 @@ import type React from "react"
 import { useEffect, useRef, useState, useCallback } from "react"
 import { initializeGame, processTick, canAttackCell } from "@/lib/game-logic"
 import { generateBotOrders } from "@/lib/bot-ai"
-import type { GameState, AttackOrder } from "@/lib/types"
+import type { GameState, AttackOrder, StructureType, UnitType, Cell } from "@/lib/types"
 import { getTerrainColor } from "@/lib/map-generator"
 import { GameHUD } from "./game-hud"
 import { ControlPanel } from "./control-panel"
 import { VictoryScreen } from "./victory-screen"
 import { Minimap } from "./minimap"
+import { STRUCTURE_DEFINITIONS, UNIT_DEFINITIONS } from "@/lib/economy"
 
 interface GameCanvasProps {
   config: {
@@ -101,6 +102,11 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
 
         ctx.fillStyle = color
         ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize)
+
+        if (cell.structure) {
+          ctx.fillStyle = "rgba(0, 0, 0, 0.4)"
+          ctx.fillRect(x * cellSize + cellSize * 0.25, y * cellSize + cellSize * 0.25, cellSize * 0.5, cellSize * 0.5)
+        }
 
         // Highlight selected cell
         if (selectedCell && selectedCell.x === x && selectedCell.y === y) {
@@ -209,6 +215,68 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
     [selectedCell, targetCell, player.balance],
   )
 
+  const handleBuildStructure = useCallback(
+    (structure: StructureType) => {
+      if (!selectedCell) return
+      setGameState((prev) => {
+        const cell = prev.grid[selectedCell.y]?.[selectedCell.x]
+        if (!cell || cell.owner !== 0) return prev
+        const def = STRUCTURE_DEFINITIONS[structure]
+        const playerState = prev.players[0]
+        if (playerState.balance < def.cost) return prev
+        const nextState = structuredClone(prev)
+        const nextCell = nextState.grid[selectedCell.y][selectedCell.x]
+        if (nextCell.owner !== 0) return prev
+        const nextPlayer = nextState.players[0]
+        nextPlayer.balance -= def.cost
+        nextCell.structure = structure
+        return nextState
+      })
+    },
+    [selectedCell],
+  )
+
+  const handleTrainUnit = useCallback((unit: UnitType) => {
+    setGameState((prev) => {
+      const playerState = prev.players[0]
+      const def = UNIT_DEFINITIONS[unit]
+      if (playerState.balance < def.cost) return prev
+      const nextState = structuredClone(prev)
+      const nextPlayer = nextState.players[0]
+      nextPlayer.balance -= def.cost
+      nextPlayer.units[unit] += 1
+      return nextState
+    })
+  }, [])
+
+  const handleToggleAlliance = useCallback(
+    (botId: number) => {
+      setGameState((prev) => {
+        const bot = prev.players[botId]
+        if (!bot || !bot.isAlive) return prev
+        const nextState = structuredClone(prev)
+        const nextPlayer = nextState.players[0]
+        const nextBot = nextState.players[botId]
+        const allied = nextPlayer.alliances.includes(botId)
+        if (allied) {
+          nextPlayer.alliances = nextPlayer.alliances.filter((id) => id !== botId)
+          nextBot.alliances = nextBot.alliances.filter((id) => id !== 0)
+        } else {
+          const acceptanceChance = nextBot.balance < nextPlayer.balance ? 0.7 : 0.45
+          if (Math.random() < acceptanceChance) {
+            nextPlayer.alliances = [...nextPlayer.alliances, botId]
+            nextBot.alliances = [...new Set([...nextBot.alliances, 0])]
+          }
+        }
+        return nextState
+      })
+    },
+    [],
+  )
+
+  const selectedCellData: Cell | null = selectedCell ? gameState.grid[selectedCell.y]?.[selectedCell.x] ?? null : null
+  const aliveBots = gameState.players.filter((p) => p.id !== 0 && p.isAlive)
+
   if (gameState.phase === "ended") {
     return <VictoryScreen gameState={gameState} onRestart={onRestart} />
   }
@@ -229,9 +297,14 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
       </div>
 
       <ControlPanel
-        isBorderSelected={targetCell !== null}
+        selectedCell={selectedCellData}
+        targetCell={targetCell}
         onSend={handleSendAttack}
-        playerBalance={player.balance}
+        onBuildStructure={handleBuildStructure}
+        onTrainUnit={handleTrainUnit}
+        onToggleAlliance={handleToggleAlliance}
+        player={player}
+        bots={aliveBots}
         gamePhase={gameState.phase}
       />
     </div>
