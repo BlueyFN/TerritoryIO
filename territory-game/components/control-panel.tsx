@@ -5,16 +5,16 @@ import { Slider } from "@/components/ui/slider"
 import { useState } from "react"
 
 interface ControlPanelProps {
-  selectedBorder: { from: number; to: number } | null
+  isBorderSelected: boolean
   onSend: (percent: number) => void
   playerBalance: number
   gamePhase: string
 }
 
-export function ControlPanel({ selectedBorder, onSend, playerBalance, gamePhase }: ControlPanelProps) {
+export function ControlPanel({ isBorderSelected, onSend, playerBalance, gamePhase }: ControlPanelProps) {
   const [customPercent, setCustomPercent] = useState(25)
 
-  const isDisabled = !selectedBorder || gamePhase === "ended"
+  const isDisabled = !isBorderSelected || gamePhase === "ended"
 
   const presets = [
     { label: "10%", value: 0.1 },
@@ -26,13 +26,13 @@ export function ControlPanel({ selectedBorder, onSend, playerBalance, gamePhase 
   return (
     <div className="bg-[#0f0f0f] border-t border-gray-800 px-6 py-4">
       <div className="max-w-7xl mx-auto">
-        {!selectedBorder && (
+        {!isBorderSelected && (
           <div className="text-center text-gray-500 py-4">
             Select one of your territories, then click a neighbor to attack
           </div>
         )}
 
-        {selectedBorder && (
+        {isBorderSelected && (
           <div className="space-y-4">
             <div className="text-center text-sm text-gray-400">Selected border - Choose attack strength</div>
 
