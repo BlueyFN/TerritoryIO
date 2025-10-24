@@ -16,9 +16,16 @@ export function VictoryScreen({ gameState, onRestart }: VictoryScreenProps) {
   const seconds = gameState.tick % 60
 
   const player = gameState.players[0]
-  const controlPercent = ((player.territories.size / gameState.territories.length) * 100).toFixed(1)
+  const totalLandCells = gameState.grid.reduce(
+    (total, row) => total + row.filter((cell) => cell.terrain !== "water").length,
+    0,
+  )
+  const controlledCells = player?.cellCount ?? 0
+  const controlPercent = totalLandCells
+    ? ((controlledCells / totalLandCells) * 100).toFixed(1)
+    : "0.0"
 
-  const finalBalance = Math.floor(player.balance)
+  const finalBalance = Math.floor(player?.balance ?? 0)
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-[#0a0a0a]">
@@ -49,8 +56,8 @@ export function VictoryScreen({ gameState, onRestart }: VictoryScreenProps) {
             <div className="text-2xl font-bold text-[#00d9ff]">${finalBalance}</div>
           </div>
           <div>
-            <div className="text-sm text-gray-400">Territories</div>
-            <div className="text-2xl font-bold text-white">{player.territories.size}</div>
+            <div className="text-sm text-gray-400">Cells Controlled</div>
+            <div className="text-2xl font-bold text-white">{controlledCells}</div>
           </div>
           <div>
             <div className="text-sm text-gray-400">Control</div>
