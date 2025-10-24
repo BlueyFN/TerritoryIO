@@ -42,9 +42,29 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
 
         const botOrders = generateBotOrders(prev)
         const allOrders = [...pendingOrders, ...botOrders]
-        setPendingOrders([])
 
-        return processTick(prev, allOrders)
+        if (pendingOrders.length > 0) {
+          setPendingOrders([])
+        }
+
+        if (botOrders.length === 0) {
+          return processTick(prev, allOrders)
+        }
+
+        const spendByBot = botOrders.reduce<Record<number, number>>((acc, order) => {
+          acc[order.attackerId] = (acc[order.attackerId] ?? 0) + order.amount
+          return acc
+        }, {})
+
+        const stateWithBotSpend: GameState = {
+          ...prev,
+          players: prev.players.map((p) => {
+            const spend = spendByBot[p.id]
+            return spend ? { ...p, balance: p.balance - spend } : p
+          }),
+        }
+
+        return processTick(stateWithBotSpend, allOrders)
       })
     }, 1000)
 
