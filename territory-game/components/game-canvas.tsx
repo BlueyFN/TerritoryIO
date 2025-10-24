@@ -209,7 +209,7 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
       </div>
 
       <ControlPanel
-        selectedBorder={targetCell !== null}
+        isBorderSelected={targetCell !== null}
         onSend={handleSendAttack}
         playerBalance={player.balance}
         gamePhase={gameState.phase}
