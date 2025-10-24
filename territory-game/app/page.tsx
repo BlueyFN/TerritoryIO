@@ -10,6 +10,8 @@ export default function Home() {
     numBots: number
     difficulty: number
     mapType: "continent" | "archipelago"
+    mapWidth: number
+    mapHeight: number
   } | null>(null)
   const [showHelp, setShowHelp] = useState(false)
   const [gameKey, setGameKey] = useState(0)
@@ -18,6 +20,8 @@ export default function Home() {
     numBots: number
     difficulty: number
     mapType: "continent" | "archipelago"
+    mapWidth: number
+    mapHeight: number
   }) => {
     setGameConfig(config)
     setShowHelp(true)

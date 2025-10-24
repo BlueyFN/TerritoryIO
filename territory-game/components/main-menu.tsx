@@ -5,13 +5,26 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 
 interface MainMenuProps {
-  onStart: (config: { numBots: number; difficulty: number; mapType: "continent" | "archipelago" }) => void
+  onStart: (config: {
+    numBots: number
+    difficulty: number
+    mapType: "continent" | "archipelago"
+    mapWidth: number
+    mapHeight: number
+  }) => void
 }
+
+const MAP_OPTIONS = [
+  { label: "Standard", description: "120 × 80 — balanced", width: 120, height: 80 },
+  { label: "Expanded", description: "160 × 110 — longer wars", width: 160, height: 110 },
+  { label: "World", description: "220 × 160 — epic campaigns", width: 220, height: 160 },
+]
 
 export function MainMenu({ onStart }: MainMenuProps) {
   const [numBots, setNumBots] = useState(25)
   const [difficulty, setDifficulty] = useState(0.5)
   const [mapType, setMapType] = useState<"continent" | "archipelago">("continent")
+  const [mapIndex, setMapIndex] = useState(0)
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-[#0a0a0a]">
@@ -49,6 +62,25 @@ export function MainMenu({ onStart }: MainMenuProps) {
           </div>
 
           <div className="space-y-3">
+            <label className="text-sm text-gray-300">Map Size</label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {MAP_OPTIONS.map((option, index) => (
+                <Button
+                  key={option.label}
+                  variant={mapIndex === index ? "default" : "outline"}
+                  onClick={() => setMapIndex(index)}
+                  className="h-24"
+                >
+                  <div className="text-center">
+                    <div className="text-base font-semibold">{option.label}</div>
+                    <div className="text-xs text-gray-400">{option.description}</div>
+                  </div>
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
             <div className="flex justify-between">
               <label className="text-sm text-gray-300">Opponents</label>
               <span className="text-sm text-[#00d9ff] font-semibold">{numBots} bots</span>
@@ -81,7 +113,15 @@ export function MainMenu({ onStart }: MainMenuProps) {
           </div>
 
           <Button
-            onClick={() => onStart({ numBots, difficulty, mapType })}
+            onClick={() =>
+              onStart({
+                numBots,
+                difficulty,
+                mapType,
+                mapWidth: MAP_OPTIONS[mapIndex].width,
+                mapHeight: MAP_OPTIONS[mapIndex].height,
+              })
+            }
             className="w-full h-14 text-lg font-semibold bg-[#00d9ff] text-black hover:bg-[#00b8dd]"
           >
             Start Game

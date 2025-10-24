@@ -5,9 +5,14 @@ import type { GameState } from "@/lib/types"
 
 interface MinimapProps {
   gameState: GameState
+  pan: { x: number; y: number }
+  zoom: number
+  baseCellSize: number
+  viewportWidth: number
+  viewportHeight: number
 }
 
-export function Minimap({ gameState }: MinimapProps) {
+export function Minimap({ gameState, pan, zoom, baseCellSize, viewportWidth, viewportHeight }: MinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -17,8 +22,8 @@ export function Minimap({ gameState }: MinimapProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    const width = 200
-    const height = 160
+    const width = 220
+    const height = 180
     canvas.width = width
     canvas.height = height
 
@@ -51,11 +56,36 @@ export function Minimap({ gameState }: MinimapProps) {
         ctx.fillRect(Math.floor(x * cellWidth), Math.floor(y * cellHeight), Math.ceil(cellWidth), Math.ceil(cellHeight))
       }
     }
-  }, [gameState])
+
+    // Draw current camera viewport
+    const visibleCellsWidth = Math.min(gridWidth, viewportWidth / (baseCellSize * zoom))
+    const visibleCellsHeight = Math.min(gridHeight, viewportHeight / (baseCellSize * zoom))
+
+    const maxStartX = Math.max(0, gridWidth - visibleCellsWidth)
+    const maxStartY = Math.max(0, gridHeight - visibleCellsHeight)
+
+    const startX = Math.min(
+      Math.max(0, (-pan.x) / (baseCellSize * zoom)),
+      maxStartX,
+    )
+    const startY = Math.min(
+      Math.max(0, (-pan.y) / (baseCellSize * zoom)),
+      maxStartY,
+    )
+
+    ctx.strokeStyle = "#00d9ff"
+    ctx.lineWidth = 2
+    ctx.strokeRect(
+      Math.max(0, startX * cellWidth),
+      Math.max(0, startY * cellHeight),
+      Math.max(4, visibleCellsWidth * cellWidth),
+      Math.max(4, visibleCellsHeight * cellHeight),
+    )
+  }, [baseCellSize, gameState, pan.x, pan.y, viewportHeight, viewportWidth, zoom])
 
   return (
-    <div className="absolute top-20 right-4 border-2 border-gray-700 rounded-lg overflow-hidden bg-black/50 backdrop-blur-sm">
-      <canvas ref={canvasRef} className="w-[200px] h-[160px]" />
+    <div className="absolute bottom-4 right-4 border border-gray-700/80 rounded-lg overflow-hidden bg-black/60 backdrop-blur">
+      <canvas ref={canvasRef} className="h-[180px] w-[220px]" />
     </div>
   )
 }

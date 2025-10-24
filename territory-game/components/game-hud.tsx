@@ -17,6 +17,13 @@ export function GameHUD({ gameState, player }: GameHUDProps) {
   const maxInterest = player.cellCount * 2
   const interestAmount = Math.min(player.balance * player.interestRate, maxInterest)
 
+  const totalStructures = Object.values(player.structures).reduce((sum, value) => sum + value, 0)
+
+  const unitSummary = Object.entries(player.units)
+    .filter(([, count]) => count > 0)
+    .map(([name, count]) => `${name}: ${count}`)
+    .join(" · ")
+
   return (
     <div className="bg-[#0f0f0f] border-b border-gray-800 px-6 py-4">
       <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -75,6 +82,21 @@ export function GameHUD({ gameState, player }: GameHUDProps) {
           <div className="text-right">
             <div className="text-xs text-gray-400 uppercase tracking-wide">Opponents</div>
             <div className="text-lg font-semibold text-red-400">{alivePlayers - 1}</div>
+          </div>
+
+          <div className="h-10 w-px bg-gray-700" />
+
+          <div className="text-right">
+            <div className="text-xs text-gray-400 uppercase tracking-wide">Military</div>
+            <div className="text-lg font-semibold text-purple-300">{Math.round(player.militaryStrength)}</div>
+            <div className="text-[10px] text-gray-500 truncate max-w-xs">{unitSummary || "No forces"}</div>
+          </div>
+
+          <div className="h-10 w-px bg-gray-700" />
+
+          <div className="text-right">
+            <div className="text-xs text-gray-400 uppercase tracking-wide">Structures</div>
+            <div className="text-lg font-semibold text-amber-300">{totalStructures}</div>
           </div>
         </div>
       </div>

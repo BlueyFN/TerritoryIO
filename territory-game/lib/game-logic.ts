@@ -1,8 +1,70 @@
-import type { GameState, Player, AttackOrder } from "./types"
+import type { GameState, Player, AttackOrder, Cell } from "./types"
 import { generatePixelMap, getPlayerColors } from "./map-generator"
+import {
+  STRUCTURE_DEFINITIONS,
+  UNIT_DEFINITIONS,
+  applyUnitUpkeep,
+  calculateAttackMultiplier,
+  calculateDefenseMultiplier,
+  createEmptyStructureTally,
+  createEmptyUnitTally,
+  updatePlayerMilitaryStrength,
+} from "./economy"
 
-export function initializeGame(numBots: number, difficulty: number, mapType: "continent" | "archipelago"): GameState {
-  const grid = generatePixelMap(mapType)
+function developBotEconomies(state: GameState) {
+  const availableStructureTypes = Object.keys(STRUCTURE_DEFINITIONS) as (keyof typeof STRUCTURE_DEFINITIONS)[]
+  state.players.forEach((player) => {
+    if (!player.isBot || !player.isAlive) return
+
+    const playerCells: Cell[] = []
+    for (const row of state.grid) {
+      for (const cell of row) {
+        if (cell.owner === player.id) {
+          playerCells.push(cell)
+        }
+      }
+    }
+
+    if (player.balance > 160 && playerCells.length > 0) {
+      const emptyCells = playerCells.filter((cell) => !cell.structure)
+      if (emptyCells.length > 0) {
+        const structureToBuild = availableStructureTypes
+          .slice()
+          .sort((a, b) => (player.structures[a] ?? 0) - (player.structures[b] ?? 0))[0]
+        const definition = STRUCTURE_DEFINITIONS[structureToBuild]
+        if (player.balance >= definition.cost) {
+          const cell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
+          cell.structure = structureToBuild
+          player.balance -= definition.cost
+        }
+      }
+    }
+
+    const desiredUnit = (Object.keys(UNIT_DEFINITIONS) as (keyof typeof UNIT_DEFINITIONS)[]).reduce(
+      (best, key) => {
+        const current = player.units[key]
+        if (!best) return key
+        return player.units[key] < player.units[best] ? key : best
+      },
+      "infantry" as keyof typeof UNIT_DEFINITIONS,
+    )
+
+    const unitDef = UNIT_DEFINITIONS[desiredUnit]
+    if (player.balance >= unitDef.cost && Math.random() < 0.6) {
+      player.balance -= unitDef.cost
+      player.units[desiredUnit] += 1
+    }
+  })
+}
+
+export function initializeGame(
+  numBots: number,
+  difficulty: number,
+  mapType: "continent" | "archipelago",
+  mapWidth = 120,
+  mapHeight = 80,
+): GameState {
+  const grid = generatePixelMap(mapType, Math.random() * 10000, mapWidth, mapHeight)
   const height = grid.length
   const width = grid[0].length
 
@@ -19,6 +81,11 @@ export function initializeGame(numBots: number, difficulty: number, mapType: "co
       name: "You",
       isBot: false,
       isAlive: true,
+      structures: createEmptyStructureTally(),
+      units: createEmptyUnitTally(),
+      unitProgress: createEmptyUnitTally(),
+      alliances: [],
+      militaryStrength: 0,
     },
   ]
 
@@ -33,6 +100,11 @@ export function initializeGame(numBots: number, difficulty: number, mapType: "co
       name: `Bot ${i}`,
       isBot: true,
       isAlive: true,
+      structures: createEmptyStructureTally(),
+      units: createEmptyUnitTally(),
+      unitProgress: createEmptyUnitTally(),
+      alliances: [],
+      militaryStrength: 0,
     })
   }
 
@@ -52,6 +124,7 @@ export function initializeGame(numBots: number, difficulty: number, mapType: "co
     if (cell) {
       grid[cell.y][cell.x].owner = player.id
       grid[cell.y][cell.x].balance = 50
+      grid[cell.y][cell.x].structure = "city"
       player.cellCount = 1
     }
   })
@@ -78,25 +151,60 @@ export function processTick(state: GameState, orders: AttackOrder[]): GameState 
     newState.phase = "active"
   }
 
+  developBotEconomies(newState)
+
   // Process attacks
   orders.forEach((order) => {
-    const fromCell = newState.grid[order.fromY][order.fromX]
-    const toCell = newState.grid[order.toY][order.toX]
+    const fromCell = newState.grid[order.fromY]?.[order.fromX]
+    const toCell = newState.grid[order.toY]?.[order.toX]
+    if (!fromCell || !toCell) return
+    if (toCell.owner === -2 || fromCell.owner !== order.attackerId) return
+
+    const attacker = newState.players[order.attackerId]
+    const defender = toCell.owner >= 0 ? newState.players[toCell.owner] : undefined
+
+    if (defender && attacker.alliances.includes(defender.id)) {
+      // Betrayal breaks alliance immediately
+      attacker.alliances = attacker.alliances.filter((id) => id !== defender.id)
+      defender.alliances = defender.alliances.filter((id) => id !== attacker.id)
+    }
+
+    const terrainMultiplier =
+      toCell.terrain === "mountain" ? 1.3 : toCell.terrain === "desert" ? 1.0 : toCell.terrain === "water" ? 1.5 : 0.9
+
+    const structureDefense = toCell.structure ? 1 + STRUCTURE_DEFINITIONS[toCell.structure].defenseBonus : 1
+    const attackStrength = order.amount * calculateAttackMultiplier(attacker)
+    const defenseStrength =
+      toCell.owner === -1
+        ? toCell.balance * 0.6
+        : toCell.balance * terrainMultiplier * structureDefense * (defender ? calculateDefenseMultiplier(defender) : 1)
 
     if (toCell.owner === -1) {
-      // Neutral territory
       toCell.owner = order.attackerId
-      toCell.balance = order.amount * 0.5
-    } else if (toCell.owner !== order.attackerId) {
-      // Enemy territory
-      const terrainMultiplier = toCell.terrain === "mountain" ? 1.2 : toCell.terrain === "desert" ? 1.0 : 0.85
-      const defenseStrength = toCell.balance * terrainMultiplier
+      toCell.balance = Math.max(10, (attackStrength - defenseStrength) * 0.4)
+      if (!toCell.structure && Math.random() < 0.5) {
+        toCell.structure = "city"
+      }
+      return
+    }
 
-      if (order.amount > defenseStrength) {
-        toCell.owner = order.attackerId
-        toCell.balance = (order.amount - defenseStrength) * 0.3
-      } else {
-        toCell.balance -= order.amount / terrainMultiplier
+    if (attackStrength > defenseStrength) {
+      toCell.owner = order.attackerId
+      toCell.balance = Math.max(5, (attackStrength - defenseStrength) * 0.25)
+      if (Math.random() < 0.3) {
+        toCell.structure = null
+      }
+      if (defender) {
+        for (const key of Object.keys(defender.units)) {
+          const unitKey = key as keyof typeof defender.units
+          defender.units[unitKey] = Math.max(0, defender.units[unitKey] - Math.ceil(defender.units[unitKey] * 0.15))
+        }
+      }
+    } else {
+      toCell.balance = Math.max(0, toCell.balance - attackStrength / terrainMultiplier)
+      for (const key of Object.keys(attacker.units)) {
+        const unitKey = key as keyof typeof attacker.units
+        attacker.units[unitKey] = Math.max(0, attacker.units[unitKey] - Math.ceil(attacker.units[unitKey] * 0.1))
       }
     }
   })
@@ -105,6 +213,7 @@ export function processTick(state: GameState, orders: AttackOrder[]): GameState 
   newState.players.forEach((player) => {
     player.cellCount = 0
     player.income = 0
+    player.structures = createEmptyStructureTally()
   })
 
   for (let y = 0; y < newState.height; y++) {
@@ -117,6 +226,22 @@ export function processTick(state: GameState, orders: AttackOrder[]): GameState 
         // Each cell generates income
         cell.balance += 1
         player.income += 1
+
+        if (cell.structure) {
+          const def = STRUCTURE_DEFINITIONS[cell.structure]
+          player.structures[cell.structure] += 1
+          player.income += def.income
+          cell.balance += def.balanceBonus
+
+          if (def.unitRate) {
+            player.unitProgress[def.unitRate.type] += def.unitRate.perTick
+            const ready = Math.floor(player.unitProgress[def.unitRate.type])
+            if (ready > 0) {
+              player.units[def.unitRate.type] += ready
+              player.unitProgress[def.unitRate.type] -= ready
+            }
+          }
+        }
       }
     }
   }
@@ -124,9 +249,12 @@ export function processTick(state: GameState, orders: AttackOrder[]): GameState 
   // Apply interest to player balance
   newState.players.forEach((player) => {
     if (player.cellCount > 0) {
+      player.balance += player.income
       const maxInterest = player.cellCount * 3
       const interest = Math.min(player.balance * player.interestRate, maxInterest)
       player.balance += interest
+      applyUnitUpkeep(player)
+      updatePlayerMilitaryStrength(player)
       player.isAlive = true
     } else {
       player.isAlive = false
