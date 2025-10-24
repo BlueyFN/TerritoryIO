@@ -20,6 +20,9 @@ interface UnitDefinition {
 export const STRUCTURE_DEFINITIONS: Record<StructureType, StructureDefinition> = {
   city: {
     name: "City Center",
+    cost: 95,
+    income: 5,
+    balanceBonus: 4,
     cost: 140,
     income: 4,
     balanceBonus: 3,
@@ -27,6 +30,7 @@ export const STRUCTURE_DEFINITIONS: Record<StructureType, StructureDefinition> =
   },
   barracks: {
     name: "Barracks",
+    cost: 70,
     cost: 90,
     income: 1,
     balanceBonus: 1,
@@ -35,6 +39,7 @@ export const STRUCTURE_DEFINITIONS: Record<StructureType, StructureDefinition> =
   },
   antiAir: {
     name: "Air Defense",
+    cost: 95,
     cost: 110,
     income: 0,
     balanceBonus: 0,
@@ -43,6 +48,7 @@ export const STRUCTURE_DEFINITIONS: Record<StructureType, StructureDefinition> =
   },
   navalYard: {
     name: "Naval Yard",
+    cost: 100,
     cost: 120,
     income: 2,
     balanceBonus: 1,
@@ -51,6 +57,7 @@ export const STRUCTURE_DEFINITIONS: Record<StructureType, StructureDefinition> =
   },
   missileSilo: {
     name: "Missile Silo",
+    cost: 160,
     cost: 180,
     income: 0,
     balanceBonus: 0,
@@ -135,12 +142,18 @@ export function calculateDefenseMultiplier(player: Player): number {
   return Math.max(1, multiplier)
 }
 
+export function calculateUnitUpkeep(player: Player): number {
 export function applyUnitUpkeep(player: Player): number {
   let upkeep = 0
   for (const [unitKey, count] of Object.entries(player.units) as [UnitType, number][]) {
     const def = UNIT_DEFINITIONS[unitKey]
     upkeep += count * def.upkeep
   }
+  return upkeep
+}
+
+export function applyUnitUpkeep(player: Player): number {
+  const upkeep = calculateUnitUpkeep(player)
   player.balance = Math.max(0, player.balance - upkeep)
   return upkeep
 }

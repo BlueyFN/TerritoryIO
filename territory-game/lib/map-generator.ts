@@ -47,9 +47,12 @@ function octaveNoise(x: number, y: number, seed: number, octaves: number): numbe
   return value / maxValue
 }
 
-export function generatePixelMap(type: "continent" | "archipelago", seed: number = Math.random() * 10000): Cell[][] {
-  const width = 120
-  const height = 80
+export function generatePixelMap(
+  type: "continent" | "archipelago",
+  seed: number = Math.random() * 10000,
+  width = 120,
+  height = 80,
+): Cell[][] {
   const grid: Cell[][] = []
 
   for (let y = 0; y < height; y++) {

@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { initializeGame, processTick, canAttackCell } from "@/lib/game-logic"
 import { generateBotOrders } from "@/lib/bot-ai"
 import type { GameState, AttackOrder, StructureType, UnitType, Cell } from "@/lib/types"
@@ -17,14 +17,27 @@ interface GameCanvasProps {
     numBots: number
     difficulty: number
     mapType: "continent" | "archipelago"
+    mapWidth: number
+    mapHeight: number
   }
   onRestart: () => void
 }
 
+const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
+
+const STRUCTURE_GLYPHS: Record<StructureType, { label: string; color: string }> = {
+  city: { label: "C", color: "#ffffff" },
+  barracks: { label: "B", color: "#7fe9ff" },
+  antiAir: { label: "AA", color: "#facc15" },
+  navalYard: { label: "N", color: "#60a5fa" },
+  missileSilo: { label: "M", color: "#f87171" },
+}
+
 export function GameCanvas({ config, onRestart }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const [gameState, setGameState] = useState<GameState>(() =>
-    initializeGame(config.numBots, config.difficulty, config.mapType),
+    initializeGame(config.numBots, config.difficulty, config.mapType, config.mapWidth, config.mapHeight),
   )
   const [selectedCell, setSelectedCell] = useState<{ x: number; y: number } | null>(null)
   const [targetCell, setTargetCell] = useState<{ x: number; y: number } | null>(null)
@@ -32,9 +45,179 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
   const [pendingOrders, setPendingOrders] = useState<AttackOrder[]>([])
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [isSpacePressed, setIsSpacePressed] = useState(false)
+  const hasManualCamera = useRef(false)
+  const hasAutoFitRef = useRef(false)
+  const mapSizeRef = useRef({ width: 0, height: 0 })
+  const panOrigin = useRef({ x: 0, y: 0 })
+  const pointerOrigin = useRef({ x: 0, y: 0 })
+  const panMoved = useRef(false)
 
   const player = gameState.players[0]
-  const cellSize = 8 * zoom
+  const viewportWidth = gameState.width * BASE_CELL_SIZE
+  const viewportHeight = gameState.height * BASE_CELL_SIZE
+
+  const clampPan = useCallback(
+    (nextPan: { x: number; y: number }, nextZoom: number = zoom) => {
+      const canvasWidth = viewportWidth
+      const canvasHeight = viewportHeight
+      const mapWidth = viewportWidth * nextZoom
+      const mapHeight = viewportHeight * nextZoom
+
+      let x = nextPan.x
+      let y = nextPan.y
+
+      if (mapWidth <= canvasWidth) {
+        x = (canvasWidth - mapWidth) / 2
+      } else {
+        const minX = canvasWidth - mapWidth
+        const maxX = 0
+        x = Math.min(Math.max(nextPan.x, minX), maxX)
+      }
+
+      if (mapHeight <= canvasHeight) {
+        y = (canvasHeight - mapHeight) / 2
+      } else {
+        const minY = canvasHeight - mapHeight
+        const maxY = 0
+        y = Math.min(Math.max(nextPan.y, minY), maxY)
+      }
+
+      return { x, y }
+    },
+    [viewportWidth, viewportHeight, zoom],
+  )
+
+  useEffect(() => {
+    setPan((prev) => clampPan(prev))
+  }, [clampPan])
+
+  const setZoomAndPan = useCallback(
+    (nextZoom: number, focus?: { x: number; y: number }, manual = true) => {
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      const clampedZoom = clampZoom(nextZoom)
+      if (manual) {
+        hasManualCamera.current = true
+      }
+      const focalPoint = focus ?? { x: canvas.width / 2, y: canvas.height / 2 }
+
+      const worldX = (focalPoint.x - pan.x) / (BASE_CELL_SIZE * zoom)
+      const worldY = (focalPoint.y - pan.y) / (BASE_CELL_SIZE * zoom)
+      const nextPan = {
+        x: focalPoint.x - worldX * BASE_CELL_SIZE * clampedZoom,
+        y: focalPoint.y - worldY * BASE_CELL_SIZE * clampedZoom,
+      }
+
+      setZoom(clampedZoom)
+      setPan(clampPan(nextPan, clampedZoom))
+    },
+    [pan.x, pan.y, zoom, clampPan],
+  )
+
+  const autoFitCamera = useCallback(
+    (force = false) => {
+      const container = containerRef.current
+      if (!container) return
+      if (!force && hasManualCamera.current) return
+
+      const availableWidth = container.clientWidth || viewportWidth
+      const availableHeight = container.clientHeight || viewportHeight
+      if (availableWidth === 0 || availableHeight === 0) return
+
+      const fitRatio = Math.min(availableWidth / viewportWidth, availableHeight / viewportHeight)
+      if (!Number.isFinite(fitRatio) || fitRatio <= 0) return
+
+      const nextZoom = clampZoom(fitRatio * 0.98)
+      hasManualCamera.current = false
+      const centeredPan = clampPan(
+        {
+          x: (viewportWidth - viewportWidth * nextZoom) / 2,
+          y: (viewportHeight - viewportHeight * nextZoom) / 2,
+        },
+        nextZoom,
+      )
+
+      setZoom(nextZoom)
+      setPan(centeredPan)
+    },
+    [clampPan, viewportHeight, viewportWidth],
+  )
+
+  useLayoutEffect(() => {
+    if (!hasAutoFitRef.current) {
+      autoFitCamera(true)
+      mapSizeRef.current = { width: viewportWidth, height: viewportHeight }
+      hasAutoFitRef.current = true
+    }
+  }, [autoFitCamera, viewportHeight, viewportWidth])
+
+  useEffect(() => {
+    const last = mapSizeRef.current
+    if (last.width !== viewportWidth || last.height !== viewportHeight) {
+      mapSizeRef.current = { width: viewportWidth, height: viewportHeight }
+      autoFitCamera(true)
+    }
+  }, [autoFitCamera, viewportHeight, viewportWidth])
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return
+    const container = containerRef.current
+    if (!container) return
+
+    const observer = new ResizeObserver(() => {
+      autoFitCamera(false)
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [autoFitCamera])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === " ") {
+        event.preventDefault()
+        setIsSpacePressed(true)
+      }
+
+      if (event.key === "=" || event.key === "+") {
+        event.preventDefault()
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const focus = { x: canvas.width / 2, y: canvas.height / 2 }
+        const nextZoom = clampZoom(zoom * 1.1)
+        setZoomAndPan(nextZoom, focus)
+      }
+
+      if (event.key === "-" || event.key === "_") {
+        event.preventDefault()
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const focus = { x: canvas.width / 2, y: canvas.height / 2 }
+        const nextZoom = clampZoom(zoom * 0.9)
+        setZoomAndPan(nextZoom, focus)
+      }
+
+      if (event.key === "0") {
+        event.preventDefault()
+        setZoomAndPan(1)
+      }
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === " ") {
+        setIsSpacePressed(false)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    window.addEventListener("keyup", handleKeyUp)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+      window.removeEventListener("keyup", handleKeyUp)
+    }
+  }, [setZoomAndPan, zoom])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -79,19 +262,23 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    canvas.width = 1200
-    canvas.height = 800
+    canvas.width = viewportWidth
+    canvas.height = viewportHeight
 
-    ctx.fillStyle = "#0a0a0a"
+    ctx.fillStyle = "#050505"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    ctx.save()
-    ctx.translate(pan.x, pan.y)
+    const scaledCellSize = BASE_CELL_SIZE * zoom
 
-    // Draw grid
     for (let y = 0; y < gameState.height; y++) {
       for (let x = 0; x < gameState.width; x++) {
         const cell = gameState.grid[y][x]
+
+        const screenX = x * scaledCellSize + pan.x
+        const screenY = y * scaledCellSize + pan.y
+
+        if (screenX + scaledCellSize < 0 || screenY + scaledCellSize < 0) continue
+        if (screenX > canvas.width || screenY > canvas.height) continue
 
         let color: string
         if (cell.owner >= 0) {
@@ -101,7 +288,38 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
         }
 
         ctx.fillStyle = color
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize)
+        ctx.fillRect(screenX, screenY, scaledCellSize + 1, scaledCellSize + 1)
+
+        if (cell.owner >= 0 && cell.owner !== 0 && player.alliances.includes(cell.owner)) {
+          ctx.fillStyle = "rgba(0, 217, 255, 0.16)"
+          ctx.fillRect(screenX, screenY, scaledCellSize + 1, scaledCellSize + 1)
+        }
+
+        if (cell.structure) {
+          ctx.fillStyle = "rgba(0, 0, 0, 0.35)"
+          ctx.fillRect(
+            screenX + scaledCellSize * 0.25,
+            screenY + scaledCellSize * 0.25,
+            scaledCellSize * 0.5,
+            scaledCellSize * 0.5,
+          )
+          const glyph = STRUCTURE_GLYPHS[cell.structure]
+          if (glyph && scaledCellSize >= 10) {
+            ctx.fillStyle = glyph.color
+            ctx.font = `${Math.max(8, scaledCellSize * 0.45)}px "Inter", sans-serif`
+            ctx.textAlign = "center"
+            ctx.textBaseline = "middle"
+            ctx.fillText(glyph.label, screenX + scaledCellSize / 2, screenY + scaledCellSize / 2)
+          }
+        }
+
+        if (zoom >= 1.1 && cell.owner === 0) {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.85)"
+          ctx.font = `${Math.max(8, scaledCellSize * 0.35)}px "Inter", sans-serif`
+          ctx.textAlign = "center"
+          ctx.textBaseline = "bottom"
+          ctx.fillText(`${Math.floor(cell.balance)}`, screenX + scaledCellSize / 2, screenY + scaledCellSize - scaledCellSize * 0.12)
+        }
 
         if (cell.structure) {
           ctx.fillStyle = "rgba(0, 0, 0, 0.4)"
@@ -111,71 +329,75 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
         // Highlight selected cell
         if (selectedCell && selectedCell.x === x && selectedCell.y === y) {
           ctx.strokeStyle = "#00d9ff"
-          ctx.lineWidth = 2
-          ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize)
+          ctx.lineWidth = Math.max(1.2, 2 * zoom)
+          ctx.strokeRect(screenX + 0.5, screenY + 0.5, scaledCellSize - 1, scaledCellSize - 1)
         }
 
-        // Highlight target cell
         if (targetCell && targetCell.x === x && targetCell.y === y) {
           ctx.strokeStyle = "#ff3366"
-          ctx.lineWidth = 2
-          ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize)
+          ctx.lineWidth = Math.max(1.2, 2 * zoom)
+          ctx.strokeRect(screenX + 0.5, screenY + 0.5, scaledCellSize - 1, scaledCellSize - 1)
         }
 
-        // Highlight hovered cell
         if (hoveredCell && hoveredCell.x === x && hoveredCell.y === y) {
-          ctx.strokeStyle = "#ffffff"
-          ctx.lineWidth = 1
-          ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize)
+          ctx.strokeStyle = "rgba(255,255,255,0.8)"
+          ctx.lineWidth = Math.max(1, 1.5 * zoom)
+          ctx.strokeRect(screenX + 0.5, screenY + 0.5, scaledCellSize - 1, scaledCellSize - 1)
         }
       }
     }
+  }, [gameState, hoveredCell, pan.x, pan.y, player.alliances, selectedCell, targetCell, viewportHeight, viewportWidth, zoom])
 
-    ctx.restore()
-  }, [gameState, selectedCell, targetCell, hoveredCell, cellSize, pan, zoom])
+  const getCanvasCoordinates = useCallback((event: { clientX: number; clientY: number }) => {
+    const canvas = canvasRef.current
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    return {
+      x: (event.clientX - rect.left) * scaleX,
+      y: (event.clientY - rect.top) * scaleY,
+    }
+  }, [])
 
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current
-      if (!canvas) return
+      if (panMoved.current) {
+        panMoved.current = false
+        return
+      }
 
-      const rect = canvas.getBoundingClientRect()
-      const canvasX = ((e.clientX - rect.left) / rect.width) * canvas.width
-      const canvasY = ((e.clientY - rect.top) / rect.height) * canvas.height
+      const coords = getCanvasCoordinates(e)
+      if (!coords) return
 
-      const gridX = Math.floor((canvasX - pan.x) / cellSize)
-      const gridY = Math.floor((canvasY - pan.y) / cellSize)
+      const scaledCellSize = BASE_CELL_SIZE * zoom
+      const gridX = Math.floor((coords.x - pan.x) / scaledCellSize)
+      const gridY = Math.floor((coords.y - pan.y) / scaledCellSize)
 
       if (gridX < 0 || gridX >= gameState.width || gridY < 0 || gridY >= gameState.height) return
 
       const cell = gameState.grid[gridY][gridX]
 
-      // If clicking own territory, select it
       if (cell.owner === 0) {
         setSelectedCell({ x: gridX, y: gridY })
         setTargetCell(null)
-      }
-      // If have selected cell, try to attack
-      else if (selectedCell) {
+      } else if (selectedCell) {
         if (canAttackCell(gameState, selectedCell.x, selectedCell.y, gridX, gridY)) {
           setTargetCell({ x: gridX, y: gridY })
         }
       }
     },
-    [gameState, selectedCell, cellSize, pan],
+    [gameState, getCanvasCoordinates, pan.x, pan.y, selectedCell, zoom],
   )
 
   const handleCanvasMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current
-      if (!canvas) return
+      const coords = getCanvasCoordinates(e)
+      if (!coords) return
 
-      const rect = canvas.getBoundingClientRect()
-      const canvasX = ((e.clientX - rect.left) / rect.width) * canvas.width
-      const canvasY = ((e.clientY - rect.top) / rect.height) * canvas.height
-
-      const gridX = Math.floor((canvasX - pan.x) / cellSize)
-      const gridY = Math.floor((canvasY - pan.y) / cellSize)
+      const scaledCellSize = BASE_CELL_SIZE * zoom
+      const gridX = Math.floor((coords.x - pan.x) / scaledCellSize)
+      const gridY = Math.floor((coords.y - pan.y) / scaledCellSize)
 
       if (gridX >= 0 && gridX < gameState.width && gridY >= 0 && gridY < gameState.height) {
         setHoveredCell({ x: gridX, y: gridY })
@@ -183,36 +405,121 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
         setHoveredCell(null)
       }
     },
-    [gameState.width, gameState.height, cellSize, pan],
+    [gameState.height, gameState.width, getCanvasCoordinates, pan.x, pan.y, zoom],
+  )
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      if (e.button === 0 && !isSpacePressed) {
+        panMoved.current = false
+        return
+      }
+
+      hasManualCamera.current = true
+      panMoved.current = false
+      setIsPanning(true)
+      setHoveredCell(null)
+      pointerOrigin.current = { x: e.clientX, y: e.clientY }
+      panOrigin.current = pan
+      canvas.setPointerCapture(e.pointerId)
+    },
+    [isSpacePressed, pan],
+  )
+
+  const endPan = useCallback((e?: React.PointerEvent<HTMLCanvasElement>) => {
+    setIsPanning(false)
+    if (e) {
+      const canvas = canvasRef.current
+      if (canvas && canvas.hasPointerCapture(e.pointerId)) {
+        canvas.releasePointerCapture(e.pointerId)
+      }
+    }
+  }, [])
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!isPanning) return
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+
+      const deltaX = (e.clientX - pointerOrigin.current.x) * scaleX
+      const deltaY = (e.clientY - pointerOrigin.current.y) * scaleY
+
+      if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) {
+        panMoved.current = true
+      }
+
+      const nextPan = {
+        x: panOrigin.current.x + deltaX,
+        y: panOrigin.current.y + deltaY,
+      }
+
+      setPan(clampPan(nextPan))
+    },
+    [clampPan, isPanning],
+  )
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent<HTMLCanvasElement>) => {
+      e.preventDefault()
+      const coords = getCanvasCoordinates(e)
+      if (!coords) return
+
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
+      const nextZoom = clampZoom(zoom * zoomFactor)
+      setZoomAndPan(nextZoom, coords)
+    },
+    [getCanvasCoordinates, setZoomAndPan, zoom],
   )
 
   const handleSendAttack = useCallback(
     (percent: number) => {
       if (!selectedCell || !targetCell) return
 
-      const amount = player.balance * percent
-      if (amount < 1) return
+      let issuedOrder: AttackOrder | null = null
+      setGameState((prev) => {
+        const originCell = prev.grid[selectedCell.y]?.[selectedCell.x]
+        if (!originCell || originCell.owner !== 0) return prev
 
-      setGameState((prev) => ({
-        ...prev,
-        players: prev.players.map((p) => (p.id === 0 ? { ...p, balance: p.balance - amount } : p)),
-      }))
+        const commander = prev.players[0]
+        const available = Math.min(commander.balance, originCell.balance)
+        const amount = Math.floor(available * percent)
+        if (amount < 1) return prev
 
-      setPendingOrders((prev) => [
-        ...prev,
-        {
+        const nextState = structuredClone(prev)
+        const nextPlayer = nextState.players[0]
+        nextPlayer.balance -= amount
+
+        const drain = Math.max(1, Math.floor(amount * 0.6))
+        const nextOrigin = nextState.grid[selectedCell.y][selectedCell.x]
+        nextOrigin.balance = Math.max(0, nextOrigin.balance - drain)
+
+        issuedOrder = {
           fromX: selectedCell.x,
           fromY: selectedCell.y,
           toX: targetCell.x,
           toY: targetCell.y,
           amount,
           attackerId: 0,
-        },
-      ])
+          sourceDrain: drain,
+        }
 
-      setTargetCell(null)
+        return nextState
+      })
+
+      if (issuedOrder) {
+        setPendingOrders((prev) => [...prev, issuedOrder])
+        setTargetCell(null)
+      }
     },
-    [selectedCell, targetCell, player.balance],
+    [selectedCell, targetCell],
   )
 
   const handleBuildStructure = useCallback(
@@ -277,23 +584,82 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
   const selectedCellData: Cell | null = selectedCell ? gameState.grid[selectedCell.y]?.[selectedCell.x] ?? null : null
   const aliveBots = gameState.players.filter((p) => p.id !== 0 && p.isAlive)
 
+  const zoomPercent = Math.round(zoom * 100)
+
   if (gameState.phase === "ended") {
     return <VictoryScreen gameState={gameState} onRestart={onRestart} />
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#0a0a0a]">
+    <div className="flex h-screen flex-col bg-[#050505] text-gray-100">
       <GameHUD gameState={gameState} player={player} />
+      <div className="flex flex-1 overflow-hidden">
+        <div className="relative flex-1 overflow-hidden">
+          <div ref={containerRef} className="relative h-full w-full">
+            <canvas
+              ref={canvasRef}
+              onClick={handleCanvasClick}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={endPan}
+              onPointerLeave={endPan}
+              onMouseMove={handleCanvasMouseMove}
+              onWheel={handleWheel}
+              onContextMenu={(e) => e.preventDefault()}
+              className="h-full w-full cursor-crosshair select-none"
+            />
 
-      <div className="flex-1 flex items-center justify-center p-4 relative">
-        <canvas
-          ref={canvasRef}
-          onClick={handleCanvasClick}
-          onMouseMove={handleCanvasMouseMove}
-          className="border border-gray-800 rounded-lg cursor-pointer"
-          style={{ width: "100%", height: "100%", maxWidth: "1200px", maxHeight: "800px" }}
-        />
-        <Minimap gameState={gameState} />
+            <div className="pointer-events-none absolute left-4 top-4 space-y-2 text-xs text-gray-300">
+              <div className="rounded-md bg-black/60 px-3 py-2 backdrop-blur">
+                <div className="font-semibold text-white">Camera Controls</div>
+                <div>Scroll to zoom, hold space + drag to pan.</div>
+                <div>Right-click or middle drag also pans.</div>
+              </div>
+            </div>
+
+            <div className="absolute right-4 top-4 flex flex-col items-end gap-2">
+              <div className="rounded-md bg-black/60 px-3 py-2 text-xs text-gray-300 backdrop-blur">
+                <div className="text-sm font-semibold text-white">Zoom {zoomPercent}%</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" className="h-8 w-8" onClick={() => setZoomAndPan(clampZoom(zoom * 1.1))}>
+                  +
+                </Button>
+                <Button size="sm" variant="outline" className="h-8 w-8" onClick={() => setZoomAndPan(clampZoom(zoom * 0.9))}>
+                  –
+                </Button>
+                <Button size="sm" variant="outline" className="h-8 w-12" onClick={() => setZoomAndPan(1)}>
+                  1x
+                </Button>
+                <Button size="sm" variant="outline" className="h-8 w-14" onClick={() => autoFitCamera(true)}>
+                  Fit
+                </Button>
+              </div>
+            </div>
+
+            <Minimap
+              gameState={gameState}
+              pan={pan}
+              zoom={zoom}
+              baseCellSize={BASE_CELL_SIZE}
+              viewportWidth={viewportWidth}
+              viewportHeight={viewportHeight}
+            />
+          </div>
+        </div>
+        <aside className="w-full max-w-[380px] overflow-y-auto border-l border-gray-800 bg-[#0f0f0f]/90 backdrop-blur">
+          <ControlPanel
+            selectedCell={selectedCellData}
+            targetCell={targetCell}
+            onSend={handleSendAttack}
+            onBuildStructure={handleBuildStructure}
+            onTrainUnit={handleTrainUnit}
+            onToggleAlliance={handleToggleAlliance}
+            player={player}
+            bots={aliveBots}
+            gamePhase={gameState.phase}
+          />
+        </aside>
       </div>
 
       <ControlPanel

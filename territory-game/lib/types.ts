@@ -32,6 +32,7 @@ export interface AttackOrder {
   toY: number
   amount: number
   attackerId: number
+  sourceDrain?: number
 }
 
 export interface GameState {

@@ -129,12 +129,100 @@ function detectOverextendedNeighbor(state: GameState, bot: Player): Cell | null 
   return null
 }
 
+interface TargetCandidate {
+  from: Cell
+  target: Cell
+  priority: number
+  bucket: number
+  neutral: boolean
+}
+
+function collectFrontierTargets(state: GameState, bot: Player, memory: BotMemory): TargetCandidate[] {
+  const botCells = getPlayerCells(state, bot.id)
+  if (botCells.length === 0) return []
+
+  const centerX = botCells.reduce((sum, cell) => sum + cell.x, 0) / botCells.length
+  const centerY = botCells.reduce((sum, cell) => sum + cell.y, 0) / botCells.length
+
+  const targets = new Map<string, TargetCandidate>()
+
+  for (const cell of botCells) {
+    const neighbors = getNeighbors(state, cell.x, cell.y)
+
+    for (const neighbor of neighbors) {
+      if (neighbor.terrain === "water") continue
+      if (neighbor.owner === bot.id) continue
+      if (neighbor.owner >= 0 && bot.alliances.includes(neighbor.owner)) continue
+      if (neighbor.owner >= 0 && memory.truceWith.has(neighbor.owner)) continue
+
+      const strength =
+        neighbor.owner === -1 ? neighbor.balance * 0.6 + 5 : evaluateCellStrength(state, neighbor)
+      const isNeutral = neighbor.owner === -1
+      const distance = Math.hypot(neighbor.x - centerX, neighbor.y - centerY)
+      const fromPower = cell.balance
+
+      let priority = strength
+      priority += distance * 2.5
+      priority -= Math.min(35, fromPower * 0.35)
+      priority *= isNeutral ? 0.75 : 1.05
+
+      const angle = Math.atan2(neighbor.y - centerY, neighbor.x - centerX)
+      const bucket = Math.floor(((angle + Math.PI) / (2 * Math.PI)) * 8)
+
+      const key = `${neighbor.x}:${neighbor.y}`
+      const existing = targets.get(key)
+      if (!existing || priority < existing.priority) {
+        targets.set(key, { from: cell, target: neighbor, priority, bucket, neutral: isNeutral })
+      }
+    }
+  }
+
+  return Array.from(targets.values())
+}
+
+function pickTargets(
+  candidates: TargetCandidate[],
+  limit: number,
+  usedBuckets: Set<number>,
+  usedTargets: Set<string>,
+): TargetCandidate[] {
+  if (limit <= 0 || candidates.length === 0) return []
+
+  const sorted = candidates.slice().sort((a, b) => a.priority - b.priority)
+  const selected: TargetCandidate[] = []
+
+  for (const candidate of sorted) {
+    if (selected.length >= limit) break
+    const key = `${candidate.target.x}:${candidate.target.y}`
+    if (usedTargets.has(key)) continue
+    if (usedBuckets.has(candidate.bucket)) continue
+
+    selected.push(candidate)
+    usedBuckets.add(candidate.bucket)
+    usedTargets.add(key)
+  }
+
+  if (selected.length < limit) {
+    for (const candidate of sorted) {
+      if (selected.length >= limit) break
+      const key = `${candidate.target.x}:${candidate.target.y}`
+      if (usedTargets.has(key)) continue
+
+      selected.push(candidate)
+      usedTargets.add(key)
+      usedBuckets.add(candidate.bucket)
+    }
+  }
+
+  return selected
+}
+
 export function generateBotOrders(state: GameState): AttackOrder[] {
   const orders: AttackOrder[] = []
 
   state.players.forEach((bot) => {
     if (!bot.isBot || !bot.isAlive) return
-    if (bot.balance < 50) return // Don't attack if too poor
+    if (bot.balance < 40) return // Don't attack if too poor
 
     const memory = getBotMemory(bot.id)
 
@@ -168,12 +256,16 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
     }
 
     // Decide attack frequency based on difficulty
-    const attackChance = 0.3 + state.difficulty * 0.4
+    const attackChance = 0.45 + state.difficulty * 0.4
     if (Math.random() > attackChance) return
 
     // Throttle attacks
     if (state.tick - memory.lastAttackTick < 2) return
 
+    if (memory.targetPreference) {
+      const pref = memory.targetPreference
+      const prefCell = state.grid[pref.y]?.[pref.x]
+      if (!prefCell || prefCell.owner === bot.id || bot.alliances.includes(prefCell.owner)) {
     let targetCell: Cell | null = null
 
     // Priority 1: Look for enemies not in alliance or truce
@@ -190,54 +282,90 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
       }
     }
 
-    // Priority 3: Find weakest neighbor
-    if (!targetCell) {
-      targetCell = findWeakestNeighbor(state, bot)
-      if (targetCell) {
-        memory.targetPreference = { x: targetCell.x, y: targetCell.y }
+    const frontier = collectFrontierTargets(state, bot, memory)
+    if (frontier.length === 0) {
+      memory.targetPreference = null
+      return
+    }
+
+    const overextended = detectOverextendedNeighbor(state, bot)
+    if (overextended) {
+      const candidate = frontier.find((c) => c.target.x === overextended.x && c.target.y === overextended.y)
+      if (candidate) {
+        candidate.priority *= 0.5
       }
     }
 
-    if (!targetCell) return
-
-    // Find a cell to attack from (one of bot's cells adjacent to target)
-    let fromCell: Cell | null = null
-    const neighbors = getNeighbors(state, targetCell.x, targetCell.y)
-
-    for (const neighbor of neighbors) {
-      if (neighbor.owner === bot.id) {
-        fromCell = neighbor
-        break
+    if (memory.targetPreference) {
+      const pref = memory.targetPreference
+      const candidate = frontier.find((c) => c.target.x === pref.x && c.target.y === pref.y)
+      if (candidate) {
+        candidate.priority *= 0.65
+      } else {
+        memory.targetPreference = null
       }
     }
 
-    if (!fromCell) return
+    const neutralTargets = frontier.filter((c) => c.neutral)
+    const hostileTargets = frontier.filter((c) => !c.neutral)
 
-    // Determine send percentage based on difficulty and situation
-    let sendPercent = 0.25 + state.difficulty * 0.2
+    const maxOrders = Math.max(3, Math.min(6, Math.ceil(bot.cellCount / 10)))
+    const usedBuckets = new Set<number>()
+    const usedTargets = new Set<string>()
+    const selected: TargetCandidate[] = []
 
-    // Be more aggressive on income ticks (every 5 ticks)
-    if (state.tick % 5 === 0) {
-      sendPercent += 0.15
+    const neutralLimit = state.phase === "free-land" ? maxOrders : Math.max(1, Math.floor(maxOrders / 2))
+    selected.push(...pickTargets(neutralTargets, neutralLimit, usedBuckets, usedTargets))
+
+    if (selected.length < maxOrders && state.phase !== "free-land") {
+      selected.push(...pickTargets(hostileTargets, maxOrders - selected.length, usedBuckets, usedTargets))
     }
 
-    // Cap at 60%
-    sendPercent = Math.min(0.6, sendPercent)
+    if (selected.length === 0) {
+      memory.targetPreference = null
+      return
+    }
 
-    const amount = Math.floor(bot.balance * sendPercent)
+    let budget = bot.balance * (0.32 + state.difficulty * 0.28)
+    budget = Math.max(25, Math.min(budget, bot.balance - 5))
+    let remainingBudget = budget
+    let issued = 0
+    const localCommit = new Map<string, number>()
 
-    if (amount <= 0) return
+    for (const target of selected) {
+      if (remainingBudget <= 5) break
+      const baseRatio = target.neutral ? 0.18 + state.difficulty * 0.12 : 0.3 + state.difficulty * 0.2
+      const spendBase = Math.min(remainingBudget, bot.balance)
+      const cellKey = `${target.from.x}:${target.from.y}`
+      const committed = localCommit.get(cellKey) ?? 0
+      const localReserve = Math.max(0, target.from.balance - committed)
+      const localCap = Math.max(25, Math.floor(localReserve * 0.9))
+      let amount = Math.max(15, Math.floor(spendBase * baseRatio))
+      amount = Math.min(amount, localCap, Math.floor(remainingBudget))
+      if (amount <= 0) continue
 
-    orders.push({
-      fromX: fromCell.x,
-      fromY: fromCell.y,
-      toX: targetCell.x,
-      toY: targetCell.y,
-      amount,
-      attackerId: bot.id,
-    })
+      orders.push({
+        fromX: target.from.x,
+        fromY: target.from.y,
+        toX: target.target.x,
+        toY: target.target.y,
+        amount,
+        attackerId: bot.id,
+      })
 
-    memory.lastAttackTick = state.tick
+      const drainEstimate = Math.max(10, Math.floor(amount * 0.6))
+      localCommit.set(cellKey, committed + drainEstimate)
+      remainingBudget -= amount
+      issued++
+
+      if (!target.neutral) {
+        memory.targetPreference = { x: target.target.x, y: target.target.y }
+      }
+    }
+
+    if (issued > 0) {
+      memory.lastAttackTick = state.tick
+    }
   })
   return orders
 }
