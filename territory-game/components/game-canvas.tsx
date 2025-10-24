@@ -11,11 +11,6 @@ import { ControlPanel } from "./control-panel"
 import { VictoryScreen } from "./victory-screen"
 import { Minimap } from "./minimap"
 import { STRUCTURE_DEFINITIONS, UNIT_DEFINITIONS } from "@/lib/economy"
-import { Button } from "@/components/ui/button"
-
-const BASE_CELL_SIZE = 12
-const MIN_ZOOM = 0.45
-const MAX_ZOOM = 2.75
 
 interface GameCanvasProps {
   config: {
@@ -326,6 +321,12 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
           ctx.fillText(`${Math.floor(cell.balance)}`, screenX + scaledCellSize / 2, screenY + scaledCellSize - scaledCellSize * 0.12)
         }
 
+        if (cell.structure) {
+          ctx.fillStyle = "rgba(0, 0, 0, 0.4)"
+          ctx.fillRect(x * cellSize + cellSize * 0.25, y * cellSize + cellSize * 0.25, cellSize * 0.5, cellSize * 0.5)
+        }
+
+        // Highlight selected cell
         if (selectedCell && selectedCell.x === x && selectedCell.y === y) {
           ctx.strokeStyle = "#00d9ff"
           ctx.lineWidth = Math.max(1.2, 2 * zoom)
@@ -660,6 +661,18 @@ export function GameCanvas({ config, onRestart }: GameCanvasProps) {
           />
         </aside>
       </div>
+
+      <ControlPanel
+        selectedCell={selectedCellData}
+        targetCell={targetCell}
+        onSend={handleSendAttack}
+        onBuildStructure={handleBuildStructure}
+        onTrainUnit={handleTrainUnit}
+        onToggleAlliance={handleToggleAlliance}
+        player={player}
+        bots={aliveBots}
+        gamePhase={gameState.phase}
+      />
     </div>
   )
 }

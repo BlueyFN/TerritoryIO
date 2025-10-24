@@ -266,6 +266,18 @@ export function generateBotOrders(state: GameState): AttackOrder[] {
       const pref = memory.targetPreference
       const prefCell = state.grid[pref.y]?.[pref.x]
       if (!prefCell || prefCell.owner === bot.id || bot.alliances.includes(prefCell.owner)) {
+    let targetCell: Cell | null = null
+
+    // Priority 1: Look for enemies not in alliance or truce
+    targetCell = detectOverextendedNeighbor(state, bot)
+
+    // Priority 2: Continue attacking preferred target
+    if (!targetCell && memory.targetPreference !== null) {
+      const { x, y } = memory.targetPreference
+      const prefCell = state.grid[y][x]
+      if (prefCell.owner !== bot.id && !bot.alliances.includes(prefCell.owner)) {
+        targetCell = prefCell
+      } else {
         memory.targetPreference = null
       }
     }

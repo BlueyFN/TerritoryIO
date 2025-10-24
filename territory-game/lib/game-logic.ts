@@ -12,6 +12,52 @@ import {
 } from "./economy"
 
 function developBotEconomies(state: GameState) {
+  const availableStructureTypes = Object.keys(STRUCTURE_DEFINITIONS) as (keyof typeof STRUCTURE_DEFINITIONS)[]
+  state.players.forEach((player) => {
+    if (!player.isBot || !player.isAlive) return
+
+    const playerCells: Cell[] = []
+    for (const row of state.grid) {
+      for (const cell of row) {
+        if (cell.owner === player.id) {
+          playerCells.push(cell)
+        }
+      }
+    }
+
+    if (player.balance > 160 && playerCells.length > 0) {
+      const emptyCells = playerCells.filter((cell) => !cell.structure)
+      if (emptyCells.length > 0) {
+        const structureToBuild = availableStructureTypes
+          .slice()
+          .sort((a, b) => (player.structures[a] ?? 0) - (player.structures[b] ?? 0))[0]
+        const definition = STRUCTURE_DEFINITIONS[structureToBuild]
+        if (player.balance >= definition.cost) {
+          const cell = emptyCells[Math.floor(Math.random() * emptyCells.length)]
+          cell.structure = structureToBuild
+          player.balance -= definition.cost
+        }
+      }
+    }
+
+    const desiredUnit = (Object.keys(UNIT_DEFINITIONS) as (keyof typeof UNIT_DEFINITIONS)[]).reduce(
+      (best, key) => {
+        const current = player.units[key]
+        if (!best) return key
+        return player.units[key] < player.units[best] ? key : best
+      },
+      "infantry" as keyof typeof UNIT_DEFINITIONS,
+    )
+
+    const unitDef = UNIT_DEFINITIONS[desiredUnit]
+    if (player.balance >= unitDef.cost && Math.random() < 0.6) {
+      player.balance -= unitDef.cost
+      player.units[desiredUnit] += 1
+    }
+  })
+}
+
+function developBotEconomies(state: GameState) {
   state.players.forEach((player) => {
     if (!player.isBot || !player.isAlive) return
 
