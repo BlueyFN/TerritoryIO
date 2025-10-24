@@ -1,4 +1,4 @@
-import type { GameState, Player, Cell } from "./types"
+import type { GameState, Player, Cell, AttackOrder } from "./types"
 
 interface BotMemory {
   lastAttackTick: number
@@ -119,7 +119,9 @@ function detectOverextendedNeighbor(state: GameState, bot: Player): Cell | null 
   return null
 }
 
-export function generateBotOrders(state: GameState): void {
+export function generateBotOrders(state: GameState): AttackOrder[] {
+  const orders: AttackOrder[] = []
+
   state.players.forEach((bot) => {
     if (!bot.isBot || !bot.isAlive) return
     if (bot.balance < 50) return // Don't attack if too poor
@@ -214,16 +216,18 @@ export function generateBotOrders(state: GameState): void {
 
     const amount = Math.floor(bot.balance * sendPercent)
 
-    bot.balance -= amount
-    fromCell.balance -= amount
+    if (amount <= 0) return
 
-    targetCell.incomingAttacks.push({
-      amount,
-      attackerId: bot.id,
+    orders.push({
       fromX: fromCell.x,
       fromY: fromCell.y,
+      toX: targetCell.x,
+      toY: targetCell.y,
+      amount,
+      attackerId: bot.id,
     })
 
     memory.lastAttackTick = state.tick
   })
+  return orders
 }
